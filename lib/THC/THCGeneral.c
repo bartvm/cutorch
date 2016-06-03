@@ -137,6 +137,7 @@ void THCudaShutdown(THCState* state)
     free(state->resourcesPerDevice[dev].devScratchSpacePerStream);
   }
   free(state->resourcesPerDevice);
+  cnmemFinalize();
 
   THCudaCheck(cudaSetDevice(prevDev));
 }
