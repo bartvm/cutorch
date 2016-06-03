@@ -4,6 +4,7 @@
 #include "THCBlas.h"
 #include "THCAllocator.h"
 #include <stdlib.h>
+#include "cnmem.h"
 
 /* Size of scratch space available in global memory per each SM + stream */
 #define GLOBAL_SCRATCH_SPACE_PER_SM_STREAM 4 * sizeof(float)
@@ -23,6 +24,20 @@ void THCudaInit(THCState* state)
   THCudaCheck(cudaGetDevice(&device));
 
   state->rngState = (THCRNGState*)malloc(sizeof(THCRNGState));
+
+  cnmemDevice_t devices[count];
+  for (int i = 0; i < count; ++i) {
+    devices[i].device = i;
+    size_t free_mem, used_mem;
+    cudaMemGetInfo(&free_mem, &used_mem);
+
+    devices[i].size = free_mem * 0.95;
+    devices[i].numStreams = 0;
+    devices[i].streams = NULL;
+  }
+  cnmemStatus_t status = cnmemInit(count, devices, CNMEM_FLAGS_DEFAULT);
+
+  // Allocation must be available from here on
   THCRandom_init(state, count, device);
 
   THCAllocator_init(state);
@@ -606,19 +621,21 @@ void THCSetGCHandler(THCState *state, void (*cutorchGCFunction_)(void *data), vo
 cudaError_t THCudaMalloc(THCState *state, void** ptr, size_t size)
 {
   THCudaCheck(cudaGetLastError());
-  cudaError_t err = cudaMalloc(ptr, size);
-  if (state->cutorchGCFunction != NULL && err != cudaSuccess) {
+  cnmemStatus_t status = cnmemMalloc(ptr, size, NULL);
+  if (status != CNMEM_STATUS_SUCCESS) {
     cudaGetLastError(); // reset OOM error
     (state->cutorchGCFunction)(state->cutorchGCData);
-    err = cudaMalloc(ptr, size);
+    status = cnmemMalloc(ptr, size, NULL);
   }
-  return err;
+  // Wrong error codes, but at least 0 is success in both cases
+  return (cudaError_t)status;
 }
 
 cudaError_t THCudaFree(THCState *state, void *ptr)
 {
-  cudaError_t err = cudaFree(ptr);
-  return err;
+  cnmemStatus_t status = cnmemFree(ptr, NULL);
+  // Wrong error codes, but at least 0 is success in both cases
+  return (cudaError_t)status;
 }
 
 static long applyHeapDelta(THCState *state) {
