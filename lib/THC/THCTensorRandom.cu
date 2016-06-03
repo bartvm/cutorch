@@ -17,8 +17,8 @@
 /* Sets up generator. Allocates but does not create the generator states. */
 __host__ void initializeGenerator(THCState *state, Generator* gen)
 {
-  THCudaCheck(THCudaMalloc(state, (void**)&gen->gen_states, MAX_NUM_BLOCKS * sizeof(curandStateMtgp32)));
-  THCudaCheck(THCudaMalloc(state, (void**)&gen->kernel_params, sizeof(mtgp32_kernel_params)));
+  THCnmemCheck(THCudaMalloc(state, (void**)&gen->gen_states, MAX_NUM_BLOCKS * sizeof(curandStateMtgp32)));
+  THCnmemCheck(THCudaMalloc(state, (void**)&gen->kernel_params, sizeof(mtgp32_kernel_params)));
 }
 
 /* Frees memory allocated during setup. */
@@ -26,12 +26,12 @@ __host__ void destroyGenerator(THCState *state, Generator* gen)
 {
   if (gen->gen_states)
   {
-    THCudaCheck(THCudaFree(state, gen->gen_states));
+    THCnmemCheck(THCudaFree(state, gen->gen_states));
     gen->gen_states = NULL;
   }
   if (gen->kernel_params)
   {
-    THCudaCheck(THCudaFree(state, gen->kernel_params));
+    THCnmemCheck(THCudaFree(state, gen->kernel_params));
     gen->kernel_params = NULL;
   }
 }
