@@ -26,12 +26,13 @@ void THCudaInit(THCState* state)
 
 #ifdef USE_CNMEM
   cnmemDevice_t devices[count];
+  double multiplier = (getenv("CUTORCH_CNMEM")) ? (atof(getenv("CUTORCH_CNMEM"))) : (0.95);
   for (int i = 0; i < count; ++i) {
     devices[i].device = i;
     size_t free_mem, used_mem;
     cudaMemGetInfo(&free_mem, &used_mem);
 
-    devices[i].size = free_mem * 0.95;
+    devices[i].size = free_mem * multiplier;
     devices[i].numStreams = 0;
     devices[i].streams = NULL;
   }
