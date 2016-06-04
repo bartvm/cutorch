@@ -24,6 +24,7 @@ void THCudaInit(THCState* state)
 
   state->rngState = (THCRNGState*)malloc(sizeof(THCRNGState));
 
+#ifdef USE_CNMEM
   cnmemDevice_t devices[count];
   for (int i = 0; i < count; ++i) {
     devices[i].device = i;
@@ -34,9 +35,9 @@ void THCudaInit(THCState* state)
     devices[i].numStreams = 0;
     devices[i].streams = NULL;
   }
-  cnmemStatus_t status = cnmemInit(count, devices, CNMEM_FLAGS_DEFAULT);
+  THCnmemCheck(cnmemInit(count, devices, CNMEM_FLAGS_DEFAULT));
+#endif
 
-  // Allocation must be available from here on
   THCRandom_init(state, count, device);
 
   THCAllocator_init(state);
@@ -71,8 +72,8 @@ void THCudaInit(THCState* state)
 
     /* Allocate scratch space for each stream */
     res->devScratchSpacePerStream = (void**) malloc(sizeof(void*));
-    THCnmemCheck(THCudaMalloc(state, &res->devScratchSpacePerStream[0],
-                              sizePerStream));
+    THMemoryCheck(THCudaMalloc(state, &res->devScratchSpacePerStream[0],
+                               sizePerStream));
   }
 
   /* Restore to previous device */
@@ -129,7 +130,7 @@ void THCudaShutdown(THCState* state)
     /* Free per-stream scratch space; starts at 0 because there is space for
        the default stream as well*/
     for (int stream = 0; stream <= state->numUserStreams; ++stream) {
-      THCnmemCheck(THCudaFree(state, THCState_getDeviceScratchSpace(state, dev, stream)));
+      THMemoryCheck(THCudaFree(state, THCState_getDeviceScratchSpace(state, dev, stream)));
     }
 
     free(state->resourcesPerDevice[dev].streams);
@@ -137,7 +138,9 @@ void THCudaShutdown(THCState* state)
     free(state->resourcesPerDevice[dev].devScratchSpacePerStream);
   }
   free(state->resourcesPerDevice);
-  cnmemFinalize();
+#ifdef USE_CNMEM
+  THCnmemCheck(cnmemFinalize());
+#endif
 
   THCudaCheck(cudaSetDevice(prevDev));
 }
@@ -312,7 +315,7 @@ void THCState_reserveStreams(THCState* state, int numStreams, int nonBlocking)
       newStreams[stream] = NULL;
       THCudaCheck(cudaStreamCreateWithFlags(newStreams + stream, flags));
       newScratchSpace[stream] = NULL;
-      THCnmemCheck(THCudaMalloc(state, &newScratchSpace[stream], scratchSpaceSize));
+      THMemoryCheck(THCudaMalloc(state, &newScratchSpace[stream], scratchSpaceSize));
     }
 
     THCCudaResourcesPerDevice* res = THCState_getDeviceResourcePtr(state, dev);
@@ -562,19 +565,21 @@ void __THCudaCheck(cudaError_t err, const char *file, const int line)
   }
 }
 
+#ifdef USE_CNMEM
 void __THCnmemCheck(cnmemStatus_t status, const char *file, const int line)
 {
   if(status != CNMEM_STATUS_SUCCESS)
   {
     static int alreadyFailed = 0;
     if(!alreadyFailed) {
-      fprintf(stderr, "THCnmemCheck FAIL file=%s line=%i error=%i : %s\n", file, line, status, cnmemGetErrorString(status));
+      fprintf(stderr, "THMemoryCheck FAIL file=%s line=%i error=%i : %s\n", file, line, status, cnmemGetErrorString(status));
       alreadyFailed = 1;
     }
     _THError(file, line, "cnmem error (%d) : %s", status,
              cnmemGetErrorString(status));
   }
 }
+#endif
 
 void __THCublasCheck(cublasStatus_t status, const char *file, const int line)
 {
@@ -632,24 +637,34 @@ void THCSetGCHandler(THCState *state, void (*cutorchGCFunction_)(void *data), vo
   state->cutorchGCData = data;
 }
 
-cnmemStatus_t THCudaMalloc(THCState *state, void** ptr, size_t size)
+memoryStatus_t THCudaMalloc(THCState *state, void** ptr, size_t size)
 {
   THCudaCheck(cudaGetLastError());
-  cnmemStatus_t status = cnmemMalloc(ptr, size, NULL);
-  if (status != CNMEM_STATUS_SUCCESS) {
+#ifdef USE_CNMEM
+  cnmemStatus_t err = cnmemMalloc(ptr, size, NULL);
+#else
+  cudaError_t err = cudaMalloc(ptr, size);
+#endif
+  if (state->cutorchGCFunction != NULL && err != 0) {
     cudaGetLastError(); // reset OOM error
     (state->cutorchGCFunction)(state->cutorchGCData);
-    status = cnmemMalloc(ptr, size, NULL);
+#ifdef USE_CNMEM
+    err = cnmemMalloc(ptr, size, NULL);
+#else
+    err = cudaMalloc(ptr, size);
+#endif
   }
-  // Wrong error codes, but at least 0 is success in both cases
-  return status;
+  return err;
 }
 
-cnmemStatus_t THCudaFree(THCState *state, void *ptr)
+memoryStatus_t THCudaFree(THCState *state, void *ptr)
 {
-  cnmemStatus_t status = cnmemFree(ptr, NULL);
-  // Wrong error codes, but at least 0 is success in both cases
-  return status;
+#ifdef USE_CNMEM
+  cnmemStatus_t err = cnmemFree(ptr, NULL);
+#else
+  cudaError_t err = cudaFree(ptr);
+#endif
+  return err;
 }
 
 static long applyHeapDelta(THCState *state) {
